@@ -52,7 +52,7 @@ impl Args {
         tokio_scoped::scope(|s| {
             s.spawn(async {
                 let mut hist : Histogram<u64> = hdrhistogram::Histogram::new(2).unwrap();
-                println!("runtime_uS,concurrency");
+                eprintln!("runtime_uS,concurrency");
                 let mut last_print = Instant::now();
                 while let Some((latency, concurrency)) = receiver.recv().await {
                     if last_print.elapsed().as_secs() > 1 {
