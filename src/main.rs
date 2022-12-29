@@ -39,12 +39,13 @@ impl Args {
         }
 
         let row_id = AtomicI32::new(0);
+        let concurrency = AtomicI32::new(0);
 
         let bench_start = Instant::now();
         let delay_between_requests = Duration::from_nanos((1e9 / self.rps as f64) as u64);
 
         let mut spawns = 0u64;
-        let (sender, mut receiver) = mpsc::channel::<(u128, u64)>(128);
+        let (sender, mut receiver) = mpsc::channel::<(u128, i32)>(128);
         let prepared = session.prepare(
             "INSERT INTO testrs.foo (id, value) VALUES (?, ?)"
         ).await?;
@@ -63,17 +64,19 @@ impl Args {
                 }
                 quantiles(&hist, 2, 3).unwrap();
             });
-            while bench_start.elapsed().as_secs() < self.runtime_s {
-                let target_spawns = ((bench_start.elapsed().as_nanos() * self.rps as u128) as f64 / 1e9).floor() as u64;
-                let next_spawns = target_spawns - spawns;
-                spawns += next_spawns;
-
-                s.scope(|s| {
+            s.scope(|s| {
+                while bench_start.elapsed().as_secs() < self.runtime_s {
+                    let target_spawns = ((bench_start.elapsed().as_nanos() * self.rps as u128) as f64 / 1e9).floor() as u64;
+                    let next_spawns = target_spawns - spawns;
+                    spawns += next_spawns;
+    
                     for _i in 0..next_spawns {
                         s.spawn(async {
                             //let blob : &[u8] = &blob;
                             let idx = row_id.fetch_add(1, Ordering::Relaxed);
                             let start = bench_start + delay_between_requests * idx as u32;
+                            concurrency.fetch_add(1, Ordering::Relaxed);
+    
                             if self.no_prepared {
                                 session.query(
                                     "INSERT INTO testrs.foo (id, value) VALUES (?, ?)",
@@ -84,12 +87,14 @@ impl Args {
                             }
                             
                             let dt = start.elapsed().as_micros();
-                            sender.send((dt, next_spawns)).await.unwrap();
+                            sender.send((dt, concurrency.fetch_add(-1, Ordering::Relaxed))).await.unwrap();
                         });
+    
                     }
-                });
-            }
+                }
+            });
             drop(sender);
+            
         });
         
         Result::Ok(())
