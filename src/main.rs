@@ -1,5 +1,3 @@
-#![feature(async_closure)]
-
 use std::{sync::{atomic::{AtomicI32, Ordering}, Arc}, time::{Instant, Duration}};
 
 use clap::Parser;
@@ -43,7 +41,7 @@ impl Args {
         let row_id = AtomicI32::new(0);
 
         let bench_start = Instant::now();
-        let delay_between_requests = Duration::from_micros((1e6 / self.rps as f64) as u64);
+        let delay_between_requests = Duration::from_nanos((1e9 / self.rps as f64) as u64);
 
         let mut spawns = 0u64;
         let (sender, mut receiver) = mpsc::channel::<(u128, u64)>(128);
@@ -66,7 +64,7 @@ impl Args {
                 quantiles(&hist, 2, 3).unwrap();
             });
             while bench_start.elapsed().as_secs() < self.runtime_s {
-                let target_spawns = ((bench_start.elapsed().as_micros() * self.rps as u128) as f64 / 1e6).floor() as u64;
+                let target_spawns = ((bench_start.elapsed().as_nanos() * self.rps as u128) as f64 / 1e9).floor() as u64;
                 let next_spawns = target_spawns - spawns;
                 spawns += next_spawns;
 
@@ -132,10 +130,10 @@ async fn main() -> Result<(), Error> {
     args.bench(&session).await?;
 
     // eliminate the test data
-    // session.query(
-    //     "DROP KEYSPACE IF EXISTS testrs",
-    //     &[]
-    // ).await?;
+    session.query(
+        "DROP KEYSPACE IF EXISTS testrs",
+        &[]
+    ).await?;
     Result::Ok(())
 }
 
