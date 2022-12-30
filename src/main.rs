@@ -68,17 +68,18 @@ impl Args {
                 quantiles(&hist, 2, 3).unwrap();
             });
             s.scope(|s| {
+
                 while bench_start.elapsed().as_secs() < self.runtime_s {
                     let target_spawns = ((bench_start.elapsed().as_nanos() * self.rps as u128) as f64 / 1e9).floor() as u64;
                     let next_spawns = target_spawns - spawns;
                     spawns += next_spawns;
     
                     for _i in 0..next_spawns {
+                        let permit = s.block_on(async { limiter.acquire().await.unwrap() });
                         s.spawn(async {
                             //let blob : &[u8] = &blob;
                             let idx = row_id.fetch_add(1, Ordering::Relaxed);
                             let start = bench_start + delay_between_requests * idx as u32;
-                            let permit = limiter.acquire().await.unwrap();
                             concurrency.fetch_add(1, Ordering::Relaxed);
 
                             if self.no_prepared {
