@@ -4,8 +4,7 @@ use clap::Parser;
 use hdrhistogram::Histogram;
 use scylla::{SessionBuilder, Session, load_balancing::{TokenAwarePolicy, RoundRobinPolicy}};
 use anyhow::Error;
-use tokio::sync::mpsc;
-
+use tokio::sync::{mpsc, Semaphore};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -29,6 +28,9 @@ struct Args {
 
     #[arg(long)]
     no_prepared: bool,
+
+    #[arg(long)]
+    max_concurrency: usize,
 }
 
 impl Args {
@@ -49,6 +51,7 @@ impl Args {
         let prepared = session.prepare(
             "INSERT INTO testrs.foo (id, value) VALUES (?, ?)"
         ).await?;
+        let limiter = &Semaphore::new(self.max_concurrency);
 
         tokio_scoped::scope(|s| {
             s.spawn(async {
@@ -75,8 +78,9 @@ impl Args {
                             //let blob : &[u8] = &blob;
                             let idx = row_id.fetch_add(1, Ordering::Relaxed);
                             let start = bench_start + delay_between_requests * idx as u32;
+                            let permit = limiter.acquire().await.unwrap();
                             concurrency.fetch_add(1, Ordering::Relaxed);
-    
+
                             if self.no_prepared {
                                 session.query(
                                     "INSERT INTO testrs.foo (id, value) VALUES (?, ?)",
@@ -88,13 +92,12 @@ impl Args {
                             
                             let dt = start.elapsed().as_micros();
                             sender.send((dt, concurrency.fetch_add(-1, Ordering::Relaxed))).await.unwrap();
+                            drop(permit);
                         });
-    
                     }
                 }
             });
             drop(sender);
-            
         });
         
         Result::Ok(())
