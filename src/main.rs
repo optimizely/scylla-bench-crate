@@ -4,7 +4,7 @@ use clap::Parser;
 use hdrhistogram::Histogram;
 use scylla::{SessionBuilder, Session, load_balancing::{TokenAwarePolicy, RoundRobinPolicy}};
 use anyhow::Error;
-use tokio::sync::{mpsc};
+use tokio::{sync::{mpsc}, task::yield_now};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -46,11 +46,11 @@ impl Args {
         let delay_between_requests = Duration::from_nanos((1e9 / self.rps as f64) as u64);
 
         let mut spawns = 0i32;
-        let (result_sender, mut result_receiver) = mpsc::channel::<(u128, i32)>(128);
+        let (result_sender, mut result_receiver) = mpsc::channel::<(u128, i32)>(self.max_concurrency);
         let prepared = session.prepare(
             "INSERT INTO testrs.foo (id, value) VALUES (?, ?)"
         ).await?;
-        let (work_sender, work_receiver) = async_channel::bounded::<i32>(128);
+        let (work_sender, work_receiver) = async_channel::bounded::<i32>(self.max_concurrency);
 
         tokio_scoped::scope(|s| {
             s.spawn(async {
@@ -100,6 +100,10 @@ impl Args {
                             work_sender.send(spawns + i).await.unwrap();
                         }
                         spawns += next_spawns;
+
+                        if next_spawns == 0 {
+                            yield_now().await;
+                        }
                     }
                     work_sender.close();
                 });
