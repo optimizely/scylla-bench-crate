@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.68"
+async-channel = "1.8.0"
 clap = { version = "4.0.32", features = ["derive"] }
 hdrhistogram = "7.5.2"
 scylla = "0.7.0"

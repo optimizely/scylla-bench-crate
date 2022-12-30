@@ -4,7 +4,7 @@ use clap::Parser;
 use hdrhistogram::Histogram;
 use scylla::{SessionBuilder, Session, load_balancing::{TokenAwarePolicy, RoundRobinPolicy}};
 use anyhow::Error;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -40,25 +40,24 @@ impl Args {
             blob.push(42_u8);
         }
 
-        let row_id = AtomicI32::new(0);
         let concurrency = AtomicI32::new(0);
 
         let bench_start = Instant::now();
         let delay_between_requests = Duration::from_nanos((1e9 / self.rps as f64) as u64);
 
-        let mut spawns = 0u64;
-        let (sender, mut receiver) = mpsc::channel::<(u128, i32)>(128);
+        let mut spawns = 0i32;
+        let (result_sender, mut result_receiver) = mpsc::channel::<(u128, i32)>(128);
         let prepared = session.prepare(
             "INSERT INTO testrs.foo (id, value) VALUES (?, ?)"
         ).await?;
-        let limiter = &Semaphore::new(self.max_concurrency);
+        let (work_sender, work_receiver) = async_channel::bounded::<i32>(128);
 
         tokio_scoped::scope(|s| {
             s.spawn(async {
                 let mut hist : Histogram<u64> = hdrhistogram::Histogram::new(2).unwrap();
                 eprintln!("runtime_uS,concurrency");
                 let mut last_print = Instant::now();
-                while let Some((latency, concurrency)) = receiver.recv().await {
+                while let Some((latency, concurrency)) = result_receiver.recv().await {
                     if last_print.elapsed().as_secs() > 1 {
                         eprintln!("{}, {}", latency, concurrency);
                         last_print = Instant::now();
@@ -68,18 +67,12 @@ impl Args {
                 quantiles(&hist, 2, 3).unwrap();
             });
             s.scope(|s| {
-
-                while bench_start.elapsed().as_secs() < self.runtime_s {
-                    let target_spawns = ((bench_start.elapsed().as_nanos() * self.rps as u128) as f64 / 1e9).floor() as u64;
-                    let next_spawns = target_spawns - spawns;
-                    spawns += next_spawns;
-    
-                    for _i in 0..next_spawns {
-                        let permit = s.block_on(async { limiter.acquire().await.unwrap() });
-                        s.spawn(async {
-                            //let blob : &[u8] = &blob;
-                            let idx = row_id.fetch_add(1, Ordering::Relaxed);
+                // spawn workers
+                for _i in 0..self.max_concurrency {
+                    s.spawn(async {
+                        while let Result::Ok(idx) = work_receiver.recv().await {
                             let start = bench_start + delay_between_requests * idx as u32;
+
                             concurrency.fetch_add(1, Ordering::Relaxed);
 
                             if self.no_prepared {
@@ -92,13 +85,27 @@ impl Args {
                             }
                             
                             let dt = start.elapsed().as_micros();
-                            sender.send((dt, concurrency.fetch_add(-1, Ordering::Relaxed))).await.unwrap();
-                            drop(permit);
-                        });
-                    }
+                            result_sender.send((dt, concurrency.fetch_add(-1, Ordering::Relaxed))).await.unwrap();
+                        }
+                    });
                 }
+
+                // spawn driver
+                s.spawn(async {
+                    while bench_start.elapsed().as_secs() < self.runtime_s {
+                        let target_spawns = ((bench_start.elapsed().as_nanos() * self.rps as u128) as f64 / 1e9).floor() as i32;
+                        let next_spawns = target_spawns - spawns;
+        
+                        for i in 0..next_spawns {
+                            work_sender.send(spawns + i).await.unwrap();
+                        }
+                        spawns += next_spawns;
+                    }
+                    work_sender.close();
+                });
+                
             });
-            drop(sender);
+            drop(result_sender);
         });
         
         Result::Ok(())
