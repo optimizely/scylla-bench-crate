@@ -1,9 +1,55 @@
 # scylla-bench Constant Rate (CRrate)
 
-(it seemed a shame to not make a rust pun)
+This simulates a constant rate load and delivers it to scylla with variable concurrency. The name is also a bad Rust pun.
 
-This is a very simple version of scylla bench designed to benchmark under constant throughput conditions which better simulate an internet workload than a static concurrency configuration.
+This is an open-loop scylla load testing tool developed in the creation of [this talk](https://docs.google.com/presentation/d/1FPBTbZJEx9xKARambDyNLLzGN2AXiukXx-vsSBZdk_I/edit?usp=sharing). It is intended to complement the scylla provided closed-loop testing tool, [scylla-bench](https://github.com/scylladb/scylla-bench).
 
-Classic load testing involves choosing a number of users (--concurrency in scylla bench). These users each make a request, wait patiently for it to be resolved, and then make their next request. This has a lovely self-stabilizing property in that if the SUT slows down so do the users. Unfortunately, this is also nothing like the real world. In the real world, there are unlimited users and they don't slow down just because your system slowed down. More often than not they speed up because they start impatiently slamming the refresh button.
+In closed-loop load testing (not this), we choose concurrency (perhaps called users in some implementations) and discover the throughput the concurrency implied. In open-loop load testing (what this does), we choose throughput and let the tool find the concurrency window that yields that throughput.
 
-This simulates a constant rate load and delivers it to scylla with unbounded concurrency.
+# Usage 
+
+The required arguments are `server`, `rps`, and `runtime-s`. We recommend choosing a `runtime-s` that is sufficiently long to observe scylla's major performance states (various levels of compaction). At reasonable throughput and cluster sizes this is typically about an hour.
+
+As the program runs it will print the elapsed time (in $\mu S$) and the current concurrency to stderr. At the conclusion of the test an hdrhistogram of request latency will be printed to stdout. If the reported concurrency reaches the limit specified by `max-concurrency` (4096 by default) then either Scylla or the test are saturated and the request latency values are not reliable. If Scylla is saturated and you're capacity planning, [in Gil's words, you've crashed your little red car and it's time to slow down and find the safe speed.](https://www.youtube.com/watch?v=lJ8ydIuPFeU). The accuracy with which we measure the destruction at saturation isn't important.
+
+You can determine that Scylla is saturated via your Scylla observability. For example, if Scylla's SSDs or CPUs are saturated then Scylla is saturated. If you suspect the test is saturated, reasonable interventions (in order of recommendation):
+* Run the test on a more privileged network. Closer to Scylla
+* Run the test from multiple nodes, splitting your throughput between the nodes
+* Increase max-concurrency
+
+```
+$ ./scylla-bench-crate --help
+
+open-loop load tester for scylla
+
+Usage: scylla-bench-crate [OPTIONS] --server <SERVER> --rps <RPS> --runtime-s <RUNTIME_S>
+
+Options:
+  -s, --server <SERVER>
+          scylla server to connect to. include the port number
+  -u, --username <USERNAME>
+          username if basic password auth should be used
+  -p, --password <PASSWORD>
+          password if basic password auth should be used
+  -b, --blob-size <BLOB_SIZE>
+          size of the non-key portion of the row to write [default: 1024]
+      --rps <RPS>
+          constant throughput to write at in requests per second
+      --runtime-s <RUNTIME_S>
+          duration of the test in seconds
+      --max-concurrency <MAX_CONCURRENCY>
+          upper limit on the concurrency to be used to reach desired rps [default: 4096]
+  -h, --help
+          Print help
+  -V, --version
+          Print version
+```
+
+# Installation
+
+TL;DR: Do the normal rust stuff.
+
+Long version
+1. Install rust with rustup if you haven't.
+2. In the project root run `cargo build --release`
+3. The thing you want is now in `./target/release/scylla-bench-crate`

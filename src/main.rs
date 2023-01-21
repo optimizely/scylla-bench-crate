@@ -6,30 +6,36 @@ use scylla::{SessionBuilder, Session, load_balancing::{TokenAwarePolicy, RoundRo
 use anyhow::Error;
 use tokio::{sync::{mpsc}, task::yield_now};
 
+/// open-loop load tester for scylla
 #[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
 struct Args {
+    /// scylla server to connect to. include the port number.
     #[arg(short, long)]
     server: String,
 
+    /// username if basic password auth should be used
     #[arg(short, long)]
-    username: String,
+    username: Option<String>,
 
+    /// password if basic password auth should be used
     #[arg(short, long)]
-    password: String,
+    password: Option<String>,
 
-    #[arg(short, long)]
+    /// size of the non-key portion of the row to write
+    #[arg(short, long, default_value_t = 1024)]
     blob_size: u32,
 
+    /// constant throughput to write at in requests per second
     #[arg(long)]
     rps: u64,
 
+    /// duration of the test in seconds
     #[arg(long)]
     runtime_s: u64,
 
-    #[arg(long)]
-    no_prepared: bool,
-
-    #[arg(long)]
+    /// upper limit on the concurrency to be used to reach desired rps
+    #[arg(long, default_value_t = 4096)]
     max_concurrency: usize,
 }
 
@@ -42,6 +48,14 @@ impl Args {
 
         let concurrency = AtomicI32::new(0);
 
+        // To avoid coordinated omission, we pre-assign a send time to every planned request at test start.
+        // This send time is bench_start + delay_between_requests * send_index
+
+        // If the SUT and test are keeping up then this assigned send time will be the real time. If the system
+        // isn't keeping up and our max_concurrency is exhausted then send time and real time can arbitrarily diverge.
+        // As long as max_concurrency was sufficient to drive the SUT out of its linear scalability region and the
+        // test hardware was sufficient to provide max_concurrency, then this divergence is realistic (imagine that the
+        // divergence represents requests stuck in the accept queue or waiting in kafka.)
         let bench_start = Instant::now();
         let delay_between_requests = Duration::from_nanos((1e9 / self.rps as f64) as u64);
 
@@ -75,14 +89,7 @@ impl Args {
 
                             concurrency.fetch_add(1, Ordering::Relaxed);
 
-                            if self.no_prepared {
-                                session.query(
-                                    "INSERT INTO testrs.foo (id, value) VALUES (?, ?)",
-                                    (idx, &blob)
-                                ).await.unwrap();
-                            } else {
-                                session.execute(&prepared, (idx, &blob)).await.unwrap();
-                            }
+                            session.execute(&prepared, (idx, &blob)).await.unwrap();
                             
                             let dt = start.elapsed().as_micros();
                             result_sender.send((dt, concurrency.fetch_add(-1, Ordering::Relaxed))).await.unwrap();
@@ -121,12 +128,20 @@ impl Args {
 async fn main() -> Result<(), Error> {
     let args : Args = Args::parse();
     let server = &args.server;
-    let server = format!("{server}:9042");
 
-    let session: Session = SessionBuilder::new()
+    let session = SessionBuilder::new()
         .known_node(server)
-        .load_balancing(Arc::new(TokenAwarePolicy::new(Box::new(RoundRobinPolicy::new()))))
-        .user(&args.username, &args.password)
+        .load_balancing(Arc::new(TokenAwarePolicy::new(Box::new(RoundRobinPolicy::new()))));
+    let session = if args.username.is_some() || args.password.is_some() {
+        if args.username.is_some() && args.password.is_some() {
+            session.user(args.username.as_ref().unwrap(), args.password.as_ref().unwrap())
+        } else {
+            panic!("if username or password are provided, both must be provided")
+        }
+    } else {
+        session
+    };
+    let session: Session = session
         .build()
         .await?;
 
