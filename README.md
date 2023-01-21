@@ -2,7 +2,7 @@
 
 This simulates a constant rate load and delivers it to scylla with variable concurrency. The name is also a bad Rust pun.
 
-This is an open-loop scylla load testing tool developed in the creation of [this talk](https://docs.google.com/presentation/d/1FPBTbZJEx9xKARambDyNLLzGN2AXiukXx-vsSBZdk_I/edit?usp=sharing). It is intended to complement the scylla provided closed-loop testing tool, [scylla-bench](https://github.com/scylladb/scylla-bench).
+This is an open-loop scylla load testing tool developed in the creation of [this talk](https://docs.google.com/presentation/d/1FPBTbZJEx9xKARambDyNLLzGN2AXiukXx-vsSBZdk_I/edit?usp=sharing). It is intended to complement the scylla provided closed-loop testing tool, [scylla-bench](https://github.com/scylladb/scylla-bench). This tool overcomes coordinated-omission using the technique advocated in [this talk.](https://www.youtube.com/watch?v=hsY35Yku7nY)
 
 In closed-loop load testing (not this), we choose concurrency (perhaps called "users" in some implementations) and discover the throughput that this concurrency implied. In open-loop load testing (what this does), we choose throughput and let the tool find the dynamic concurrency that yields that throughput.
 
