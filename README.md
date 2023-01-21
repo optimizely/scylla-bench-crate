@@ -1,4 +1,4 @@
-# scylla-bench Constant Rate (CRrate)
+# scylla-bench: constant cate (CRrate)
 
 This simulates a constant rate load and delivers it to scylla with variable concurrency. The name is also a bad Rust pun.
 
